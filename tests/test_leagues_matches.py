@@ -238,3 +238,24 @@ async def test_coach_dashboard(client):
     assert body["league_count"] == 1
     assert body["certification_status"] == "not_submitted"
     assert body["quick_stats"] == {"players": 0, "matches": 0, "win_rate": 0.0}
+
+
+async def test_league_lookup_by_code(client):
+    coach = await onboard_coach(client)
+    league = await create_league(client, coach)
+    player = await onboard_player(client)
+
+    r = await client.get(f"/v1/leagues/by-code/{league['league_code'].lower()}",
+                         headers=player["headers"])
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == league["id"]
+    assert body["name"] == league["name"]
+    assert len(body["teams"]) == 2
+    assert body["teams"][0]["player_count"] == 0
+    # no member identities leak pre-join
+    assert "players" not in body and "members" not in body
+
+    missing = await client.get("/v1/leagues/by-code/NOPE-00-00", headers=player["headers"])
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "INVALID_CODE"

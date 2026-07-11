@@ -261,6 +261,49 @@ async def exit_league(league_id: uuid.UUID, background: BackgroundTasks,
 
 
 # --------------------------------------------------------------------------- detail / code / players
+@router.get("/leagues/by-code/{code}")
+async def league_by_code(code: str, db: AsyncSession = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    """Preview a league from its invite code (join screen's team picker).
+
+    Deliberately excludes member identities — only per-team counts — since
+    the caller hasn't joined yet and members may be minors.
+    """
+    league = (
+        await db.execute(
+            select(League).options(selectinload(League.teams), selectinload(League.logo))
+            .where(League.league_code == code.upper().strip())
+        )
+    ).scalar_one_or_none()
+    if league is None:
+        raise not_found("INVALID_CODE", "That league code doesn't exist.")
+
+    counts = {
+        team_id: count
+        for team_id, count in (
+            await db.execute(
+                select(LeagueMember.team_id, func.count())
+                .where(LeagueMember.league_id == league.id, LeagueMember.status == "active")
+                .group_by(LeagueMember.team_id)
+            )
+        ).all()
+    }
+    return {
+        "id": str(league.id),
+        "name": league.name,
+        "league_code": league.league_code,
+        "cricket_type": _TYPE_LABELS.get(league.cricket_type, league.cricket_type),
+        "gender": "Men's" if league.gender == "mens" else "Women's",
+        "location": league.location,
+        "status": league.status,
+        "logo_url": media_url(league.logo),
+        "teams": [
+            {"id": str(t.id), "name": t.name, "player_count": counts.get(t.id, 0)}
+            for t in league.teams
+        ],
+    }
+
+
 @router.get("/leagues/{league_id}")
 async def league_detail(league_id: uuid.UUID, db: AsyncSession = Depends(get_db),
                         user: User = Depends(get_current_user)):
