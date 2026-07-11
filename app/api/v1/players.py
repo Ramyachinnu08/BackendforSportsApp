@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -92,7 +92,9 @@ async def dashboard(db: AsyncSession = Depends(get_db), user: User = Depends(req
                 select(Match).options(selectinload(Match.team_a).selectinload(Team.league),
                                       selectinload(Match.team_b))
                 .where(Match.league_id == league.id, Match.status == "scheduled",
-                       Match.starts_at >= datetime.now(timezone.utc))
+                       Match.starts_at >= datetime.now(timezone.utc),
+                       or_(Match.team_a_id == member.team_id,
+                           Match.team_b_id == member.team_id))
                 .order_by(Match.starts_at).limit(1)
             )
         ).scalar_one_or_none()
