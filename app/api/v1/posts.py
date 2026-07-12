@@ -19,6 +19,7 @@ from app.db.models import (
     PostLike,
     PostMedia,
     User,
+    UserProfile,
 )
 from app.services import scoring
 from app.services.media_ops import store_upload
@@ -134,6 +135,15 @@ async def create_post(
     await scoring.award_points(db, user.id, source="post", source_id=post.id,
                                points=settings.points_per_post, reason="Shared a post in the Dugout",
                                idempotency_key=f"post:{post.id}")
+    # keep leaderboards live: posting changes the score, so the player's
+    # category ranking must be refreshed too (matches/recos already do this)
+    if user.role == "player":
+        profile = (await db.execute(
+            select(UserProfile).where(UserProfile.user_id == user.id)
+        )).scalar_one_or_none()
+        category = scoring.ranking_category(profile)
+        if category:
+            await scoring.recompute_rankings(db, category)
     await db.commit()
 
     post = await _post_or_404(db, post.id)
