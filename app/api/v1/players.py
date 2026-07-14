@@ -382,14 +382,15 @@ async def playbook(tab: str | None = Query(default=None),
     for key in wanted:
         media_rows = (
             await db.execute(
-                select(Media)
+                select(Media, PostMedia.post_id)
                 .join(PostMedia, PostMedia.media_id == Media.id)
                 .join(Post, Post.id == PostMedia.post_id)
                 .where(Post.author_id == user.id, Post.category == key, Post.deleted_at.is_(None))
                 .order_by(Media.created_at.desc()).limit(24)
             )
-        ).scalars().all()
-        tabs[key] = [serialize_media_item(m) | {"date": m.created_at.date().isoformat()} for m in media_rows]
+        ).all()
+        tabs[key] = [serialize_media_item(m) | {"date": m.created_at.date().isoformat(),
+                                                "post_id": str(pid)} for m, pid in media_rows]
 
     return {
         "profile": {

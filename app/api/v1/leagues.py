@@ -126,8 +126,25 @@ async def create_league(
     notif = await create_notification(db, user.id, "league_created",
                                       f"'{league.name}' is live — share code {code} with your players",
                                       deep_link_id=str(league.id))
+    # Announce to registered players so they can join: every onboarded
+    # player gets a notification about the new league.
+    player_ids = (
+        await db.execute(
+            select(User.id).where(User.role == "player",
+                                  User.deleted_at.is_(None),
+                                  User.player_id.is_not(None))
+        )
+    ).scalars().all()
+    player_notifs = []
+    for pid in player_ids:
+        player_notifs.append(await create_notification(
+            db, pid, "league_created",
+            f"New league '{league.name}' by Coach {user.full_name} is open — join with code {code}",
+            title="New League Created", deep_link_id=str(league.id)))
     await db.commit()
     background.add_task(deliver_notification, notif.id)
+    for pn in player_notifs:
+        background.add_task(deliver_notification, pn.id)
 
     await db.refresh(league, ["logo"])
     return {
