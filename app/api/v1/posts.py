@@ -9,7 +9,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.deps import Page, get_current_user
-from app.core.errors import bad_request, not_found, unprocessable
+from app.core.errors import bad_request, forbidden, not_found, unprocessable
+from app.core.security import utcnow
 from app.db.base import get_db
 from app.db.models import (
     Follow,
@@ -154,6 +155,22 @@ async def create_post(
 async def _emit_counts(post_id: uuid.UUID, likes: int, comments: int):
     from app.realtime import manager
     await manager.emit(f"post:{post_id}:counts", "like", {"likes": likes, "comments": comments})
+
+
+@router.delete("/posts/{post_id}")
+async def delete_post(post_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+                      user: User = Depends(get_current_user)):
+    """Soft-delete a post. Only the author can delete their own post."""
+    post = (
+        await db.execute(select(Post).where(Post.id == post_id, Post.deleted_at.is_(None)))
+    ).scalar_one_or_none()
+    if post is None:
+        raise not_found("POST_NOT_FOUND", "Post not found.")
+    if post.author_id != user.id:
+        raise forbidden("NOT_POST_AUTHOR", "You can only delete your own posts.")
+    post.deleted_at = utcnow()
+    await db.commit()
+    return {"deleted": True, "id": str(post_id)}
 
 
 @router.post("/posts/{post_id}/like")
