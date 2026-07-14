@@ -76,7 +76,7 @@ async def feed(
     )
 
     if tab in ("players", "coaches", "teams"):
-        author_type = tab.rstrip("s")  # players→player, coaches→coach, teams→team
+        author_type = {"players": "player", "coaches": "coach", "teams": "team"}[tab]
         query = query.where(Post.author_type == author_type)
         count_q = count_q.where(Post.author_type == author_type)
     elif tab == "following":
