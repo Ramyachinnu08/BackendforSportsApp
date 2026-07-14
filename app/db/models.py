@@ -6,8 +6,11 @@ inline) so tuning doesn't require a Postgres enum migration.
 import uuid
 from datetime import date, datetime
 
+from sqlalchemy.sql import func
+
 from sqlalchemy import (
     BigInteger,
+    LargeBinary,
     Boolean,
     CheckConstraint,
     Date,
@@ -558,3 +561,16 @@ class AuditLog(UUIDPkMixin, TimestampMixin, Base):
     entity: Mapped[str | None] = mapped_column(Text)
     entity_id: Mapped[str | None] = mapped_column(Text)
     detail: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class MediaBlob(Base):
+    """File bytes stored in Postgres — used by the 'db' storage provider so
+    uploads survive restarts on hosts with ephemeral disks (e.g. Render
+    free tier)."""
+    __tablename__ = "media_blobs"
+
+    storage_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    mime: Mapped[str | None] = mapped_column(Text)
+    acl: Mapped[str] = mapped_column(String(16), default="public", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

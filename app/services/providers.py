@@ -143,6 +143,57 @@ class LocalStorage(StorageProvider):
             path.unlink()
 
 
+class DbStorage(StorageProvider):
+    """Stores file bytes in Postgres (media_blobs). Survives restarts on
+    hosts with ephemeral disks (Render free tier). Select with
+    STORAGE_PROVIDER=db. Files are served from /v1/files/{key}."""
+
+    async def save(self, data: bytes, filename: str, mime: str, acl: str = "public") -> StorageResult:
+        from app.db.base import SessionLocal
+        from app.db.models import MediaBlob
+
+        safe = filename.replace("/", "_").replace("\\", "_")
+        key = f"{acl}/{uuid.uuid4().hex}_{safe}"
+        async with SessionLocal() as session:
+            session.add(MediaBlob(storage_key=key, data=data, mime=mime, acl=acl))
+            await session.commit()
+        url = self.public_url(key) if acl == "public" else None
+        return StorageResult(key, url)
+
+    async def read(self, storage_key: str):
+        from sqlalchemy import select
+
+        from app.db.base import SessionLocal
+        from app.db.models import MediaBlob
+
+        async with SessionLocal() as session:
+            return (
+                await session.execute(select(MediaBlob).where(MediaBlob.storage_key == storage_key))
+            ).scalar_one_or_none()
+
+    async def open_path(self, storage_key: str) -> Path:  # not disk-backed
+        raise FileNotFoundError(storage_key)
+
+    def public_url(self, storage_key: str) -> str:
+        from urllib.parse import quote
+
+        return f"{settings.base_url}/v1/files/{quote(storage_key, safe='')}"
+
+    def signed_url(self, storage_key: str) -> str:
+        exp, sig = sign_storage_key(storage_key)
+        return f"{settings.base_url}/v1/files/signed?key={storage_key}&exp={exp}&sig={sig}"
+
+    async def delete(self, storage_key: str) -> None:
+        from sqlalchemy import delete as sa_delete
+
+        from app.db.base import SessionLocal
+        from app.db.models import MediaBlob
+
+        async with SessionLocal() as session:
+            await session.execute(sa_delete(MediaBlob).where(MediaBlob.storage_key == storage_key))
+            await session.commit()
+
+
 _storage: StorageProvider | None = None
 
 
@@ -150,24 +201,42 @@ def get_storage() -> StorageProvider:
     global _storage
     if _storage is None:
         # S3Storage (boto3 presigned) slots in here when settings.storage_provider == "s3".
-        _storage = LocalStorage()
+        if settings.storage_provider == "db":
+            _storage = DbStorage()
+        else:
+            _storage = LocalStorage()
     return _storage
 
 
 # --- image hygiene ----------------------------------------------------------------
+MAX_IMAGE_DIMENSION = 1920  # px — plenty for phone screens, keeps feeds smooth
+
+
 def strip_image_metadata(data: bytes, mime: str) -> tuple[bytes, int | None, int | None]:
-    """Re-encode images to drop EXIF (incl. GPS). Returns (bytes, width, height)."""
+    """Normalize uploaded images:
+    1. Apply the EXIF Orientation tag BEFORE stripping it, so portrait
+       photos aren't saved sideways (bug: photos rotated 90°).
+    2. Downscale anything larger than MAX_IMAGE_DIMENSION — multi-MP
+       camera photos were huge and made feed scrolling stutter.
+    3. Re-encode without EXIF (drops GPS and other metadata).
+    Returns (bytes, width, height)."""
     try:
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         img = Image.open(io.BytesIO(data))
+        # bake the rotation in, then EXIF can be safely discarded
+        img = ImageOps.exif_transpose(img)
+        if max(img.size) > MAX_IMAGE_DIMENSION:
+            img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION),
+                          Image.LANCZOS)
         width, height = img.size
         out = io.BytesIO()
         fmt = {"image/jpeg": "JPEG", "image/png": "PNG", "image/webp": "WEBP"}.get(mime, img.format or "PNG")
         if fmt == "JPEG" and img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
-        # Re-encode without carrying EXIF (drops GPS and other metadata).
-        save_kwargs = {"exif": b""} if fmt in ("JPEG", "WEBP") else {}
+        save_kwargs: dict = {"exif": b""} if fmt in ("JPEG", "WEBP") else {}
+        if fmt == "JPEG":
+            save_kwargs["quality"] = 88
         img.save(out, format=fmt, **save_kwargs)
         return out.getvalue(), width, height
     except Exception:  # non-image or unreadable — return as-is

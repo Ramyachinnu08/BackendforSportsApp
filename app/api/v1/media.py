@@ -3,7 +3,7 @@ and signed serving for private files."""
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -142,7 +142,34 @@ async def get_media(media_id: uuid.UUID, db: AsyncSession = Depends(get_db),
 async def serve_signed(key: str = Query(...), exp: int = Query(...), sig: str = Query(...)):
     if not verify_storage_signature(key, exp, sig):
         raise forbidden("NOT_ALLOWED", "This link is invalid or has expired.")
-    path = await get_storage().open_path(key)
+    storage = get_storage()
+    if hasattr(storage, "read"):  # db-backed
+        blob = await storage.read(key)
+        if blob is None:
+            raise not_found("MEDIA_NOT_FOUND", "File not found.")
+        return Response(content=blob.data,
+                        media_type=blob.mime or "application/octet-stream")
+    path = await storage.open_path(key)
+    if not path.exists():
+        raise not_found("MEDIA_NOT_FOUND", "File not found.")
+    return FileResponse(path)
+
+
+@router.get("/files/{storage_key:path}")
+async def serve_public_file(storage_key: str):
+    """Serves PUBLIC files for the db storage provider (Render-friendly).
+    Private files must go through /files/signed."""
+    if not storage_key.startswith("public/"):
+        raise forbidden("NOT_ALLOWED", "Use a signed link for private files.")
+    storage = get_storage()
+    if hasattr(storage, "read"):
+        blob = await storage.read(storage_key)
+        if blob is None:
+            raise not_found("MEDIA_NOT_FOUND", "File not found.")
+        return Response(content=blob.data,
+                        media_type=blob.mime or "application/octet-stream",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    path = await storage.open_path(storage_key)
     if not path.exists():
         raise not_found("MEDIA_NOT_FOUND", "File not found.")
     return FileResponse(path)
