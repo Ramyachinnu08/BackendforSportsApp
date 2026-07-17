@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     sms_provider: str = "console"     # console | msg91 | twilio
     email_provider: str = "console"   # console | smtp | ses
     push_provider: str = "console"    # console | fcm
-    storage_provider: str = "local"   # local | s3
+    storage_provider: str = "local"   # local | db | cloudinary | s3
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
     storage_dir: str = "./storage"
     signed_url_ttl_seconds: int = 600
 
