@@ -157,6 +157,10 @@ async def select_sport(body: SportIn, db: AsyncSession = Depends(get_db),
     if user.player_id is None:
         user.player_id = await allocate_player_id(db)
 
+    await scoring.award_points(db, user.id, source="signup",
+                               points=settings.points_signup_bonus,
+                               reason="Welcome bonus — joined SportyQo",
+                               idempotency_key=f"signup:{user.id}")
     qs = await scoring.recompute_score(db, user.id)
     await scoring.grant_milestone(db, user.id, "started_playing", subtitle="Joined SportyQo")
     user.onboarding_stage = "complete"
