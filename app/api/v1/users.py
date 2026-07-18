@@ -382,3 +382,69 @@ async def untrack(user_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         await db.execute(select(func.count()).select_from(Follow).where(Follow.followee_id == user_id))
     ).scalar_one()
     return {"tracking": False, "follower_count": count}
+                      # ── Connections (followers / following / teams lists) ──────────────────
+@router.get("/users/me/connections")
+async def my_connections(kind: str = "followers",
+                         db: AsyncSession = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    """Instagram-style lists behind the Playbook stats row.
+    kind = followers | following | teams"""
+    from app.db.models import League, LeagueMember, Team
+
+    if kind == "teams":
+        rows = (
+            await db.execute(
+                select(Team, League)
+                .join(LeagueMember, LeagueMember.team_id == Team.id)
+                .join(League, Team.league_id == League.id)
+                .where(LeagueMember.user_id == user.id,
+                       LeagueMember.status == "active")
+                .order_by(LeagueMember.created_at.desc())
+            )
+        ).all()
+        return {"items": [
+            {"id": str(t.id), "name": t.name,
+             "league_name": lg.name,
+             "league_code": lg.league_code}
+            for t, lg in rows
+        ]}
+
+    if kind == "following":
+        cond = Follow.follower_id == user.id
+        other_col = Follow.followee_id
+    else:  # followers (default)
+        cond = Follow.followee_id == user.id
+        other_col = Follow.follower_id
+
+    rows = (
+        await db.execute(
+            select(User)
+            .join(Follow, other_col == User.id)
+            .where(cond, User.deleted_at.is_(None))
+            .order_by(Follow.created_at.desc())
+        )
+    ).scalars().all()
+
+    ids = [u.id for u in rows]
+    i_follow: set = set()
+    if ids:
+        i_follow = {
+            fid for (fid,) in (
+                await db.execute(
+                    select(Follow.followee_id)
+                    .where(Follow.follower_id == user.id,
+                           Follow.followee_id.in_(ids))
+                )
+            ).all()
+        }
+
+    return {"items": [
+        {"id": str(u.id),
+         "full_name": u.full_name,
+         "player_id": u.player_id,
+         "role": u.role,
+         "verified": u.verified,
+         "avatar_url": avatar_url(u),
+         "viewer_following": u.id in i_follow}
+        for u in rows
+    ]}
