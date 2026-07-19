@@ -58,6 +58,14 @@ async def create_notification(
         deep_link=link_tpl.format(id=deep_link_id) if "{id}" in link_tpl else link_tpl,
         payload=payload,
     )
+    prefs = (
+        await db.execute(
+            select(UserSettings).where(UserSettings.user_id == user_id))
+    ).scalar_one_or_none()
+    if prefs is not None and not prefs.notifications_enabled:
+        # Notifications toggle is OFF — return an unsaved row so callers
+        # can still read .id; nothing lands in the bell and delivery no-ops.
+        return notif
     db.add(notif)
     await db.flush()
     return notif
