@@ -330,6 +330,9 @@ async def public_profile(user_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         bio = (p.bio if p else None) or ""
         hashtags = (p.hashtags if p else None) or []
 
+    if target_settings is not None and not target_settings.location_access:
+        location = ""   # Location Access toggle OFF — hide from public profile
+
     return {
         "id": str(target.id),
         "name": target.full_name,
