@@ -112,6 +112,33 @@ async def dashboard(db: AsyncSession = Depends(get_db), user: User = Depends(req
                          .where(Notification.user_id == user.id, Notification.read_at.is_(None)))
     ).scalar_one()
 
+    # named points breakdown for the home screen — straight from the ledger
+    recent_events = (
+        await db.execute(select(QoScoreEvent).where(QoScoreEvent.user_id == user.id)
+                         .order_by(QoScoreEvent.created_at.desc()).limit(10))
+    ).scalars().all()
+    source_labels = {"signup": "Bonus", "match": "Match", "recommendation": "Coach",
+                     "post": "Community", "streak": "Streak", "milestone": "Milestone"}
+    recent_points = [
+        {"source": e.source,
+         "label": source_labels.get(e.source, e.source.title()),
+         "points": e.points,
+         "reason": e.reason,
+         "created_at": e.created_at.isoformat()}
+        for e in recent_events
+    ]
+    totals_rows = (
+        await db.execute(select(QoScoreEvent.source, func.coalesce(func.sum(QoScoreEvent.points), 0))
+                         .where(QoScoreEvent.user_id == user.id).group_by(QoScoreEvent.source))
+    ).all()
+    by_source = {source: int(points) for source, points in totals_rows}
+    points_breakdown = {
+        "bonus": by_source.get("signup", 0) + by_source.get("streak", 0) + by_source.get("milestone", 0),
+        "match": by_source.get("match", 0),
+        "coach": by_source.get("recommendation", 0),
+        "community": by_source.get("post", 0),
+    }
+
     first_name = user.full_name.split(" ")[0] if user.full_name else ""
     return {
         "player": {
@@ -130,6 +157,8 @@ async def dashboard(db: AsyncSession = Depends(get_db), user: User = Depends(req
         },
         "active_league": active_league,
         "upcoming_match": upcoming_match,
+        "recent_points": recent_points,
+        "points_breakdown": points_breakdown,
         "unread_notifications": unread,
     }
 
