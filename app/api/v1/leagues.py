@@ -58,7 +58,7 @@ def _normalize_cricket_type(value: str) -> str:
 
 async def _league_or_404(db: AsyncSession, league_id: uuid.UUID) -> League:
     league = (
-        await db.execute(select(League).options(selectinload(League.teams), selectinload(League.logo))
+        await db.execute(select(League).options(selectinload(League.teams).selectinload(Team.logo), selectinload(League.logo))
                          .where(League.id == league_id))
     ).scalar_one_or_none()
     if league is None:
@@ -155,7 +155,7 @@ async def create_league(
         "gender": "Men's" if league.gender == "mens" else "Women's",
         "location": league.location,
         "logo_url": media_url(league.logo),
-        "teams": [{"id": str(t.id), "name": t.name} for t in teams],
+        "teams": [{"id": str(t.id), "name": t.name, "logo_url": None} for t in teams],
         "status": league.status,
         "created_at": league.created_at.isoformat(),
     }
@@ -288,7 +288,7 @@ async def league_by_code(code: str, db: AsyncSession = Depends(get_db),
     """
     league = (
         await db.execute(
-            select(League).options(selectinload(League.teams), selectinload(League.logo))
+            select(League).options(selectinload(League.teams).selectinload(Team.logo), selectinload(League.logo))
             .where(League.league_code == code.upper().strip())
         )
     ).scalar_one_or_none()
@@ -315,7 +315,7 @@ async def league_by_code(code: str, db: AsyncSession = Depends(get_db),
         "status": league.status,
         "logo_url": media_url(league.logo),
         "teams": [
-            {"id": str(t.id), "name": t.name, "player_count": counts.get(t.id, 0)}
+            {"id": str(t.id), "name": t.name, "player_count": counts.get(t.id, 0), "logo_url": media_url(t.logo)}
             for t in league.teams
         ],
     }
@@ -382,7 +382,7 @@ async def league_detail(league_id: uuid.UUID, db: AsyncSession = Depends(get_db)
         "stats": {"teams": len(league.teams), "matches": matches_count,
                   "my_rank": my_rank, "my_points": my_points},
         "my_team": my_team,
-        "teams": [{"id": str(t.id), "name": t.name} for t in league.teams],
+        "teams": [{"id": str(t.id), "name": t.name, "logo_url": media_url(t.logo)} for t in league.teams],
         "standings": standings,
     }
 
@@ -398,6 +398,26 @@ async def league_code(league_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         "share_url": f"{settings.share_base_url}/join/{league.league_code}",
         "qr_url": None,  # QR is rendered client-side from share_url
     }
+
+
+@router.post("/leagues/{league_id}/teams/{team_id}/logo")
+async def upload_team_logo(league_id: uuid.UUID, team_id: uuid.UUID,
+                           logo: UploadFile = File(...),
+                           db: AsyncSession = Depends(get_db),
+                           user: User = Depends(require_coach)):
+    """Set a team's logo/icon (e.g. RCB badge). League owner only."""
+    league = await _league_or_404(db, league_id)
+    if league.owner_id != user.id:
+        raise forbidden("NOT_LEAGUE_OWNER", "Only the league owner can set team logos.")
+    team = (
+        await db.execute(select(Team).where(Team.id == team_id, Team.league_id == league.id))
+    ).scalar_one_or_none()
+    if team is None:
+        raise not_found("LEAGUE_NOT_FOUND", "That team doesn't belong to this league.")
+    media = await store_upload(db, user, logo, purpose="team_logo")
+    team.logo_media_id = media.id
+    await db.commit()
+    return {"team_id": str(team.id), "name": team.name, "logo_url": media_url(media)}
 
 
 class CompleteTournamentIn(BaseModel):
