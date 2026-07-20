@@ -18,6 +18,7 @@ from app.services.providers import get_storage, strip_image_metadata, virus_scan
 PURPOSES: dict[str, tuple[int, tuple[str, ...], str]] = {
     "avatar": (settings.max_avatar_bytes, ("image/jpeg", "image/png", "image/webp"), "public"),
     "league_logo": (settings.max_logo_bytes, ("image/png", "image/jpeg"), "public"),
+    "team_logo": (settings.max_logo_bytes, ("image/png", "image/jpeg", "image/webp"), "public"),
     "team_logo": (settings.max_logo_bytes, ("image/png", "image/jpeg"), "public"),
     "post_image": (settings.max_image_bytes, ("image/",), "public"),
     "post_video": (settings.max_video_bytes, ("video/mp4", "video/quicktime", "video/webm"), "public"),

@@ -80,17 +80,52 @@ def next_tier_of(tier: CardTier, tiers: list[CardTier]) -> CardTier | None:
     return tiers[idx] if idx < len(tiers) else None
 
 
-def match_points(runs: int, wickets: int, catches: int, is_mom: bool, won: bool) -> int:
-    """Deterministic, server-owned formula (weights in config — spec Appendix A #4)."""
-    pts = (
-        settings.points_participation
-        + math.floor(runs * settings.points_per_run)
-        + wickets * settings.points_per_wicket
-        + catches * settings.points_per_catch
-        + (settings.points_mom_bonus if is_mom else 0)
-        + (settings.points_win_bonus if won else 0)
-    )
-    return int(pts)
+def match_points(runs: int, wickets: int, catches: int, is_mom: bool, won: bool,
+                 is_player_of_match: bool = False, is_best_bowler: bool = False,
+                 is_best_batsman: bool = False, is_mvp: bool = False) -> int:
+    """Official SportyQo cricket slabs (server-owned — never trust client math).
+
+    Batting:   0-10→5 | 11-25→8 | 26-45→12 | 46-99→20 | 100+→50
+    Bowling:   1-2 wkts→5 | 3+→20
+    Fielding:  2 catches→2 | 3+→5
+    Bonus:     MoM +20, Player of the Match +20, Best Bowler +20,
+               Best Batsman +20, MVP +25, team win +20 (all config)."""
+    if runs >= 100:
+        batting = 50
+    elif runs >= 46:
+        batting = 20
+    elif runs >= 26:
+        batting = 12
+    elif runs >= 11:
+        batting = 8
+    else:
+        batting = 5
+
+    if wickets >= 3:
+        bowling = 20
+    elif wickets >= 1:
+        bowling = 5
+    else:
+        bowling = 0
+
+    if catches >= 3:
+        fielding = 5
+    elif catches == 2:
+        fielding = 2
+    else:
+        fielding = 0
+
+    bonus = (settings.points_mom_bonus if is_mom else 0) + (
+        settings.points_win_bonus if won else 0)
+    if is_player_of_match:
+        bonus += settings.points_award_bonus
+    if is_best_bowler:
+        bonus += settings.points_award_bonus
+    if is_best_batsman:
+        bonus += settings.points_award_bonus
+    if is_mvp:
+        bonus += settings.points_mvp_bonus
+    return batting + bowling + fielding + bonus
 
 
 async def award_points(

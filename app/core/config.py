@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     sms_provider: str = "console"     # console | msg91 | twilio
     email_provider: str = "console"   # console | smtp | ses
     push_provider: str = "console"    # console | fcm
-    storage_provider: str = "local"   # local | s3
+    storage_provider: str = "local"   # local | db | cloudinary | s3
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
     storage_dir: str = "./storage"
     signed_url_ttl_seconds: int = 600
 
@@ -74,14 +77,18 @@ class Settings(BaseSettings):
     max_cert_documents: int = 5
 
     # --- Qo Score weights (tunable) --------------------------------------
-    points_per_run: float = 0.5
-    points_per_wicket: int = 20
-    points_per_catch: int = 10
-    points_mom_bonus: int = 25
-    points_win_bonus: int = 15
-    points_participation: int = 5
-    points_per_post: int = 12
+    points_mom_bonus: int = 20          # Man of the Match
+    points_win_bonus: int = 20          # team match win
+    points_award_bonus: int = 20        # Player of Match / Best Bowler / Best Batsman
+    points_mvp_bonus: int = 25          # MVP performance
+    points_per_post: int = 1            # image post upload
+    points_per_video_post: int = 2      # video post upload
+    points_per_certificate_post: int = 5
     points_per_recommendation: int = 25
+    points_signup_bonus: int = 50       # welcome bonus on joining
+    points_tournament_finalist: int = 50
+    points_tournament_runner_up: int = 50
+    points_tournament_champion: int = 100
     recommendation_cooldown_days: int = 30
 
     # --- misc -------------------------------------------------------------

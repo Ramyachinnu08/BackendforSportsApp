@@ -58,7 +58,7 @@ def _normalize_cricket_type(value: str) -> str:
 
 async def _league_or_404(db: AsyncSession, league_id: uuid.UUID) -> League:
     league = (
-        await db.execute(select(League).options(selectinload(League.teams), selectinload(League.logo))
+        await db.execute(select(League).options(selectinload(League.teams).selectinload(Team.logo), selectinload(League.logo))
                          .where(League.id == league_id))
     ).scalar_one_or_none()
     if league is None:
@@ -155,7 +155,7 @@ async def create_league(
         "gender": "Men's" if league.gender == "mens" else "Women's",
         "location": league.location,
         "logo_url": media_url(league.logo),
-        "teams": [{"id": str(t.id), "name": t.name} for t in teams],
+        "teams": [{"id": str(t.id), "name": t.name, "logo_url": None} for t in teams],
         "status": league.status,
         "created_at": league.created_at.isoformat(),
     }
@@ -288,7 +288,7 @@ async def league_by_code(code: str, db: AsyncSession = Depends(get_db),
     """
     league = (
         await db.execute(
-            select(League).options(selectinload(League.teams), selectinload(League.logo))
+            select(League).options(selectinload(League.teams).selectinload(Team.logo), selectinload(League.logo))
             .where(League.league_code == code.upper().strip())
         )
     ).scalar_one_or_none()
@@ -315,7 +315,7 @@ async def league_by_code(code: str, db: AsyncSession = Depends(get_db),
         "status": league.status,
         "logo_url": media_url(league.logo),
         "teams": [
-            {"id": str(t.id), "name": t.name, "player_count": counts.get(t.id, 0)}
+            {"id": str(t.id), "name": t.name, "player_count": counts.get(t.id, 0), "logo_url": media_url(t.logo)}
             for t in league.teams
         ],
     }
@@ -382,7 +382,7 @@ async def league_detail(league_id: uuid.UUID, db: AsyncSession = Depends(get_db)
         "stats": {"teams": len(league.teams), "matches": matches_count,
                   "my_rank": my_rank, "my_points": my_points},
         "my_team": my_team,
-        "teams": [{"id": str(t.id), "name": t.name} for t in league.teams],
+        "teams": [{"id": str(t.id), "name": t.name, "logo_url": media_url(t.logo)} for t in league.teams],
         "standings": standings,
     }
 
@@ -398,6 +398,123 @@ async def league_code(league_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         "share_url": f"{settings.share_base_url}/join/{league.league_code}",
         "qr_url": None,  # QR is rendered client-side from share_url
     }
+
+
+@router.post("/leagues/{league_id}/teams/{team_id}/logo")
+async def upload_team_logo(league_id: uuid.UUID, team_id: uuid.UUID,
+                           logo: UploadFile = File(...),
+                           db: AsyncSession = Depends(get_db),
+                           user: User = Depends(require_coach)):
+    """Set a team's logo/icon (e.g. RCB badge). League owner only."""
+    league = await _league_or_404(db, league_id)
+    if league.owner_id != user.id:
+        raise forbidden("NOT_LEAGUE_OWNER", "Only the league owner can set team logos.")
+    team = (
+        await db.execute(select(Team).where(Team.id == team_id, Team.league_id == league.id))
+    ).scalar_one_or_none()
+    if team is None:
+        raise not_found("LEAGUE_NOT_FOUND", "That team doesn't belong to this league.")
+    media = await store_upload(db, user, logo, purpose="team_logo")
+    team.logo_media_id = media.id
+    await db.commit()
+    return {"team_id": str(team.id), "name": team.name, "logo_url": media_url(media)}
+
+
+class CompleteTournamentIn(BaseModel):
+    winner_team_id: uuid.UUID
+    runner_up_team_id: uuid.UUID | None = None
+
+
+@router.post("/leagues/{league_id}/complete")
+async def complete_tournament(league_id: uuid.UUID, body: CompleteTournamentIn,
+                              background: BackgroundTasks,
+                              db: AsyncSession = Depends(get_db),
+                              user: User = Depends(require_coach)):
+    """Finish a tournament: Championship Winner +100, Runner-Up +50 per player
+    (spec: Team Achievements). Idempotent — a completed league can't award twice."""
+    league = await _league_or_404(db, league_id)
+    if league.owner_id != user.id:
+        raise forbidden("NOT_LEAGUE_OWNER", "Only the league owner can complete the tournament.")
+    if league.status == "completed":
+        raise conflict("ALREADY_COMPLETED", "This tournament was already completed.")
+    if body.runner_up_team_id is not None and body.runner_up_team_id == body.winner_team_id:
+        raise bad_request("VALIDATION_ERROR", "Winner and runner-up must be different teams.",
+                          field="runner_up_team_id")
+
+    async def _team_or_400(team_id: uuid.UUID) -> Team:
+        team = (
+            await db.execute(select(Team).where(Team.id == team_id, Team.league_id == league.id))
+        ).scalar_one_or_none()
+        if team is None:
+            raise bad_request("VALIDATION_ERROR", "That team doesn't belong to this league.",
+                              field="winner_team_id")
+        return team
+
+    winner = await _team_or_400(body.winner_team_id)
+    runner_up = await _team_or_400(body.runner_up_team_id) if body.runner_up_team_id else None
+
+    notif_ids: list[uuid.UUID] = []
+    categories: set[str] = set()
+    awarded: dict[str, int] = {}
+
+    async def _award_team(team: Team, points: int, label: str, key: str) -> None:
+        member_ids = (
+            await db.execute(select(LeagueMember.user_id)
+                             .where(LeagueMember.league_id == league.id,
+                                    LeagueMember.team_id == team.id,
+                                    LeagueMember.status == "active"))
+        ).scalars().all()
+        for uid in member_ids:
+            event = await scoring.award_points(
+                db, uid, source="milestone", source_id=league.id, points=points,
+                reason=f"{label} — {team.name} • {league.name}",
+                idempotency_key=f"tournament:{league.id}:{uid}:{key}",
+            )
+            if event is not None:
+                awarded[str(uid)] = points
+                if key == "champion":
+                    await scoring.grant_milestone(db, uid, "first_tournament",
+                                                  subtitle=f"Won {league.name}")
+                n = await create_notification(
+                    db, uid, "points_added",
+                    f"+{points} Qo points — {label} with {team.name}!")
+                notif_ids.append(n.id)
+                profile = (
+                    await db.execute(select(UserProfile).where(UserProfile.user_id == uid))
+                ).scalar_one_or_none()
+                category = scoring.ranking_category(profile)
+                if category:
+                    categories.add(category)
+
+    await _award_team(winner, settings.points_tournament_champion,
+                      "Championship Winner", "champion")
+    if runner_up is not None:
+        await _award_team(runner_up, settings.points_tournament_runner_up,
+                          "Championship Runner-Up", "runner_up")
+
+    league.status = "completed"
+    for category in categories:
+        await scoring.recompute_rankings(db, category)
+
+    # announce to every league member
+    all_members = (
+        await db.execute(select(LeagueMember.user_id)
+                         .where(LeagueMember.league_id == league.id,
+                                LeagueMember.status == "active"))
+    ).scalars().all()
+    text = f"{winner.name} won {league.name}! 🏆"
+    for uid in all_members:
+        n = await create_notification(db, uid, "match_result", text)
+        notif_ids.append(n.id)
+
+    await db.commit()
+    for nid in notif_ids:
+        background.add_task(deliver_notification, nid)
+
+    return {"league_id": str(league.id), "status": "completed",
+            "winner_team": winner.name,
+            "runner_up_team": runner_up.name if runner_up else None,
+            "qo_points_awarded": awarded}
 
 
 @router.get("/leagues/{league_id}/players")

@@ -21,6 +21,7 @@ from app.db.models import (
     User,
     UserProfile,
 )
+from app.core.config import settings
 from app.services import scoring
 from app.services.notify import create_notification, deliver_notification
 
@@ -34,6 +35,10 @@ class PlayerStat(BaseModel):
     wickets: int = Field(0, ge=0, le=10)
     catches: int = Field(0, ge=0, le=20)
     is_mom: bool = False
+    is_player_of_match: bool = False
+    is_best_bowler: bool = False
+    is_best_batsman: bool = False
+    is_mvp: bool = False
 
 
 class PointsIn(BaseModel):
@@ -101,6 +106,11 @@ async def submit_points(
 
     winning_team = {"team_a_won": match.team_a_id, "team_b_won": match.team_b_id}.get(body.result)
 
+    # teams up-front so every ledger reason can carry real names
+    team_a = await db.get(Team, match.team_a_id)
+    team_b = await db.get(Team, match.team_b_id)
+    team_name = {match.team_a_id: team_a.name, match.team_b_id: team_b.name}
+
     awarded: dict[str, int] = {}
     notif_ids: list[uuid.UUID] = []
     categories: set[str] = set()
@@ -109,7 +119,12 @@ async def submit_points(
     for stat in body.player_stats:
         player_team = team_of[stat.user_id]
         won = winning_team is not None and player_team == winning_team
-        points = scoring.match_points(stat.runs, stat.wickets, stat.catches, stat.is_mom, won)
+        points = scoring.match_points(
+            stat.runs, stat.wickets, stat.catches, stat.is_mom, won,
+            is_player_of_match=stat.is_player_of_match,
+            is_best_bowler=stat.is_best_bowler,
+            is_best_batsman=stat.is_best_batsman,
+            is_mvp=stat.is_mvp)
 
         db.add(MatchParticipant(match_id=match.id, user_id=stat.user_id, team_id=player_team,
                                 runs=stat.runs, balls=stat.balls, wickets=stat.wickets,
@@ -120,9 +135,24 @@ async def submit_points(
         ).scalar_one_or_none()
         old_ranks[stat.user_id] = qs_before.rank if qs_before else None
 
+        opponent_name = team_name[match.team_b_id if player_team == match.team_a_id else match.team_a_id]
+        parts = [f"vs {opponent_name}",
+                 f"{stat.runs} runs, {stat.wickets} wkts, {stat.catches} catches"]
+        if stat.is_mom:
+            parts.append(f"MoM bonus +{settings.points_mom_bonus}")
+        if stat.is_player_of_match:
+            parts.append(f"Player of the Match +{settings.points_award_bonus}")
+        if stat.is_best_bowler:
+            parts.append(f"Best Bowler +{settings.points_award_bonus}")
+        if stat.is_best_batsman:
+            parts.append(f"Best Batsman +{settings.points_award_bonus}")
+        if stat.is_mvp:
+            parts.append(f"MVP +{settings.points_mvp_bonus}")
+        if won:
+            parts.append(f"{team_name[player_team]} win bonus +{settings.points_win_bonus}")
         event = await scoring.award_points(
             db, stat.user_id, source="match", source_id=match.id, points=points,
-            reason=f"Match performance • {stat.runs} runs, {stat.wickets} wkts, {stat.catches} catches",
+            reason="Match " + " • ".join(parts),
             idempotency_key=f"match:{match.id}:{stat.user_id}:{idempotency_key}",
         )
         awarded[str(stat.user_id)] = points if event is not None else 0
@@ -187,8 +217,6 @@ async def submit_points(
             notif_ids.append(n.id)
 
     # match result to all league members
-    team_a = await db.get(Team, match.team_a_id)
-    team_b = await db.get(Team, match.team_b_id)
     result_text = {
         "team_a_won": f"{team_a.name} beat {team_b.name}",
         "team_b_won": f"{team_b.name} beat {team_a.name}",

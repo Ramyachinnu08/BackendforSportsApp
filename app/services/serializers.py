@@ -30,12 +30,25 @@ def avatar_url(user: User) -> str | None:
     return media_url(user.avatar)
 
 
+def _video_thumbnail(url: str | None) -> str | None:
+    """Cloudinary can serve a video's first frame as a jpg poster (so_0)."""
+    if not url or "/video/upload/" not in url:
+        return None
+    base = url.replace("/video/upload/", "/video/upload/so_0,w_720/", 1)
+    root, dot, _ext = base.rpartition(".")
+    return (root + ".jpg") if dot else (base + ".jpg")
+
+
 def serialize_media_item(media: Media, thumbnail: str | None = None) -> dict:
+    url = media_url(media)
+    is_video = (media.mime or "").startswith("video/")
     return {
         "id": str(media.id),
-        "type": "video" if (media.mime or "").startswith("video/") else "image",
-        "url": media_url(media),
-        "thumbnail_url": thumbnail or media_url(media),
+        "type": "video" if is_video else "image",
+        "url": url,
+        "thumbnail_url": thumbnail
+        or (_video_thumbnail(url) if is_video else None)
+        or url,
         "title": media.title,
         "subtitle": media.subtitle,
         "duration_ms": media.duration_ms,

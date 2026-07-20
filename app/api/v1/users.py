@@ -15,6 +15,7 @@ from app.core.errors import bad_request, conflict, not_found
 from app.core.security import utcnow
 from app.db.base import get_db
 from app.db.models import (
+    CoachProfile,
     Follow,
     FriendRequest,
     Friendship,
@@ -22,6 +23,7 @@ from app.db.models import (
     Post,
     PostMedia,
     QoScore,
+    Recommendation,
     Session,
     User,
     UserProfile,
@@ -157,6 +159,10 @@ async def select_sport(body: SportIn, db: AsyncSession = Depends(get_db),
     if user.player_id is None:
         user.player_id = await allocate_player_id(db)
 
+    await scoring.award_points(db, user.id, source="signup",
+                               points=settings.points_signup_bonus,
+                               reason="Welcome bonus — joined SportyQo",
+                               idempotency_key=f"signup:{user.id}")
     qs = await scoring.recompute_score(db, user.id)
     await scoring.grant_milestone(db, user.id, "started_playing", subtitle="Joined SportyQo")
     user.onboarding_stage = "complete"
@@ -201,6 +207,16 @@ async def _get_or_create_settings(db: AsyncSession, user: User) -> UserSettings:
         db.add(s)
         await db.flush()
     return s
+
+
+@router.delete("/users/me/avatar")
+async def remove_avatar(db: AsyncSession = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """Remove the current profile photo (players and coaches — same User row).
+    The uploaded media stays in storage history; only the reference is cleared."""
+    user.avatar_media_id = None
+    await db.commit()
+    return {"avatar_url": None}
 
 
 @router.get("/users/me/settings")
@@ -326,6 +342,30 @@ async def public_profile(user_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         bio = (p.bio if p else None) or ""
         hashtags = (p.hashtags if p else None) or []
 
+    if target_settings is not None and not target_settings.location_access:
+        location = ""   # Location Access toggle OFF — hide from public profile
+
+    reco_rows = (
+        await db.execute(
+            select(Recommendation, User, CoachProfile)
+            .join(User, User.id == Recommendation.coach_id)
+            .outerjoin(CoachProfile, CoachProfile.user_id == User.id)
+            .where(Recommendation.player_id == target.id)
+            .order_by(Recommendation.created_at.desc()).limit(5)
+        )
+    ).all()
+    recommendations = [
+        {
+            "coach_name": coach.full_name,
+            "coach_role": " • ".join([x for x in [(cp.role_title if cp else None) or "Coach",
+                                                  cp.academy if cp else None] if x]),
+            "note": reco.note,
+            "rating": float(reco.rating) if reco.rating is not None else None,
+            "created_at": reco.created_at.isoformat(),
+        }
+        for reco, coach, cp in reco_rows
+    ]
+
     return {
         "id": str(target.id),
         "name": target.full_name,
@@ -336,7 +376,9 @@ async def public_profile(user_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         "avatar_url": avatar_url(target),
         "bio": bio,
         "hashtags": hashtags,
+        "player_id": target.player_id,
         "qo_score": target.qo_score.score if target.qo_score else 0,
+        "recommendations": recommendations,
         "private": is_private and not can_see_tabs,
         "counts": {"posts": posts_count, "followers": followers, "following": following},
         "viewer": {"following": viewer_following, "is_friend": is_friend, "can_message": True},
@@ -382,3 +424,69 @@ async def untrack(user_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         await db.execute(select(func.count()).select_from(Follow).where(Follow.followee_id == user_id))
     ).scalar_one()
     return {"tracking": False, "follower_count": count}
+                      # ── Connections (followers / following / teams lists) ──────────────────
+@router.get("/users/me/connections")
+async def my_connections(kind: str = "followers",
+                         db: AsyncSession = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    """Instagram-style lists behind the Playbook stats row.
+    kind = followers | following | teams"""
+    from app.db.models import League, LeagueMember, Team
+
+    if kind == "teams":
+        rows = (
+            await db.execute(
+                select(Team, League)
+                .join(LeagueMember, LeagueMember.team_id == Team.id)
+                .join(League, Team.league_id == League.id)
+                .where(LeagueMember.user_id == user.id,
+                       LeagueMember.status == "active")
+                .order_by(LeagueMember.created_at.desc())
+            )
+        ).all()
+        return {"items": [
+            {"id": str(t.id), "name": t.name,
+             "league_name": lg.name,
+             "league_code": lg.league_code}
+            for t, lg in rows
+        ]}
+
+    if kind == "following":
+        cond = Follow.follower_id == user.id
+        other_col = Follow.followee_id
+    else:  # followers (default)
+        cond = Follow.followee_id == user.id
+        other_col = Follow.follower_id
+
+    rows = (
+        await db.execute(
+            select(User)
+            .join(Follow, other_col == User.id)
+            .where(cond, User.deleted_at.is_(None))
+            .order_by(Follow.created_at.desc())
+        )
+    ).scalars().all()
+
+    ids = [u.id for u in rows]
+    i_follow: set = set()
+    if ids:
+        i_follow = {
+            fid for (fid,) in (
+                await db.execute(
+                    select(Follow.followee_id)
+                    .where(Follow.follower_id == user.id,
+                           Follow.followee_id.in_(ids))
+                )
+            ).all()
+        }
+
+    return {"items": [
+        {"id": str(u.id),
+         "full_name": u.full_name,
+         "player_id": u.player_id,
+         "role": u.role,
+         "verified": u.verified,
+         "avatar_url": avatar_url(u),
+         "viewer_following": u.id in i_follow}
+        for u in rows
+    ]}

@@ -122,8 +122,16 @@ async def create_post(
     tags += [w.lstrip("#") for w in content.split() if w.startswith("#") and len(w) > 1]
     tags = list(dict.fromkeys(tags))
 
+    has_video = any(
+        ((u.content_type or "").lower()).startswith("video/") for u in media)
+    if category == "certificates":
+        post_pts = settings.points_per_certificate_post
+    elif has_video:
+        post_pts = settings.points_per_video_post
+    else:
+        post_pts = settings.points_per_post
     post = Post(author_id=user.id, author_type=user.role, content=content.strip(),
-                hashtags=tags, category=category, qo_points_earned=settings.points_per_post)
+                hashtags=tags, category=category, qo_points_earned=post_pts)
     db.add(post)
     await db.flush()
 
@@ -134,7 +142,7 @@ async def create_post(
         db.add(PostMedia(post_id=post.id, media_id=m.id, position=i))
 
     await scoring.award_points(db, user.id, source="post", source_id=post.id,
-                               points=settings.points_per_post, reason="Shared a post in the Dugout",
+                               points=post_pts, reason="Shared a post in the Dugout",
                                idempotency_key=f"post:{post.id}")
     # keep leaderboards live: posting changes the score, so the player's
     # category ranking must be refreshed too (matches/recos already do this)
