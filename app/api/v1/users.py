@@ -209,6 +209,16 @@ async def _get_or_create_settings(db: AsyncSession, user: User) -> UserSettings:
     return s
 
 
+@router.delete("/users/me/avatar")
+async def remove_avatar(db: AsyncSession = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """Remove the current profile photo (players and coaches — same User row).
+    The uploaded media stays in storage history; only the reference is cleared."""
+    user.avatar_media_id = None
+    await db.commit()
+    return {"avatar_url": None}
+
+
 @router.get("/users/me/settings")
 async def get_settings_route(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     return _settings_payload(await _get_or_create_settings(db, user))
