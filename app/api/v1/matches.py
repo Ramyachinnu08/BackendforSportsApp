@@ -35,6 +35,10 @@ class PlayerStat(BaseModel):
     wickets: int = Field(0, ge=0, le=10)
     catches: int = Field(0, ge=0, le=20)
     is_mom: bool = False
+    is_player_of_match: bool = False
+    is_best_bowler: bool = False
+    is_best_batsman: bool = False
+    is_mvp: bool = False
 
 
 class PointsIn(BaseModel):
@@ -115,7 +119,12 @@ async def submit_points(
     for stat in body.player_stats:
         player_team = team_of[stat.user_id]
         won = winning_team is not None and player_team == winning_team
-        points = scoring.match_points(stat.runs, stat.wickets, stat.catches, stat.is_mom, won)
+        points = scoring.match_points(
+            stat.runs, stat.wickets, stat.catches, stat.is_mom, won,
+            is_player_of_match=stat.is_player_of_match,
+            is_best_bowler=stat.is_best_bowler,
+            is_best_batsman=stat.is_best_batsman,
+            is_mvp=stat.is_mvp)
 
         db.add(MatchParticipant(match_id=match.id, user_id=stat.user_id, team_id=player_team,
                                 runs=stat.runs, balls=stat.balls, wickets=stat.wickets,
@@ -131,6 +140,14 @@ async def submit_points(
                  f"{stat.runs} runs, {stat.wickets} wkts, {stat.catches} catches"]
         if stat.is_mom:
             parts.append(f"MoM bonus +{settings.points_mom_bonus}")
+        if stat.is_player_of_match:
+            parts.append(f"Player of the Match +{settings.points_award_bonus}")
+        if stat.is_best_bowler:
+            parts.append(f"Best Bowler +{settings.points_award_bonus}")
+        if stat.is_best_batsman:
+            parts.append(f"Best Batsman +{settings.points_award_bonus}")
+        if stat.is_mvp:
+            parts.append(f"MVP +{settings.points_mvp_bonus}")
         if won:
             parts.append(f"{team_name[player_team]} win bonus +{settings.points_win_bonus}")
         event = await scoring.award_points(
