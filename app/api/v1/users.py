@@ -15,6 +15,7 @@ from app.core.errors import bad_request, conflict, not_found
 from app.core.security import utcnow
 from app.db.base import get_db
 from app.db.models import (
+    CoachProfile,
     Follow,
     FriendRequest,
     Friendship,
@@ -22,6 +23,7 @@ from app.db.models import (
     Post,
     PostMedia,
     QoScore,
+    Recommendation,
     Session,
     User,
     UserProfile,
@@ -333,6 +335,27 @@ async def public_profile(user_id: uuid.UUID, db: AsyncSession = Depends(get_db),
     if target_settings is not None and not target_settings.location_access:
         location = ""   # Location Access toggle OFF — hide from public profile
 
+    reco_rows = (
+        await db.execute(
+            select(Recommendation, User, CoachProfile)
+            .join(User, User.id == Recommendation.coach_id)
+            .outerjoin(CoachProfile, CoachProfile.user_id == User.id)
+            .where(Recommendation.player_id == target.id)
+            .order_by(Recommendation.created_at.desc()).limit(5)
+        )
+    ).all()
+    recommendations = [
+        {
+            "coach_name": coach.full_name,
+            "coach_role": " • ".join([x for x in [(cp.role_title if cp else None) or "Coach",
+                                                  cp.academy if cp else None] if x]),
+            "note": reco.note,
+            "rating": float(reco.rating) if reco.rating is not None else None,
+            "created_at": reco.created_at.isoformat(),
+        }
+        for reco, coach, cp in reco_rows
+    ]
+
     return {
         "id": str(target.id),
         "name": target.full_name,
@@ -343,7 +366,9 @@ async def public_profile(user_id: uuid.UUID, db: AsyncSession = Depends(get_db),
         "avatar_url": avatar_url(target),
         "bio": bio,
         "hashtags": hashtags,
+        "player_id": target.player_id,
         "qo_score": target.qo_score.score if target.qo_score else 0,
+        "recommendations": recommendations,
         "private": is_private and not can_see_tabs,
         "counts": {"posts": posts_count, "followers": followers, "following": following},
         "viewer": {"following": viewer_following, "is_friend": is_friend, "can_message": True},
