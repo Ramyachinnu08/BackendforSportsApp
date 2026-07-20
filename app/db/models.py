@@ -211,6 +211,7 @@ class Team(UUIDPkMixin, TimestampMixin, Base):
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     league: Mapped[League] = relationship(back_populates="teams")
+    logo: Mapped["Media | None"] = relationship(foreign_keys=[logo_media_id])
 
     __table_args__ = (UniqueConstraint("league_id", "name", name="uq_team_name_per_league"),)
 
