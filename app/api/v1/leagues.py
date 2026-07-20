@@ -400,6 +400,103 @@ async def league_code(league_id: uuid.UUID, db: AsyncSession = Depends(get_db),
     }
 
 
+class CompleteTournamentIn(BaseModel):
+    winner_team_id: uuid.UUID
+    runner_up_team_id: uuid.UUID | None = None
+
+
+@router.post("/leagues/{league_id}/complete")
+async def complete_tournament(league_id: uuid.UUID, body: CompleteTournamentIn,
+                              background: BackgroundTasks,
+                              db: AsyncSession = Depends(get_db),
+                              user: User = Depends(require_coach)):
+    """Finish a tournament: Championship Winner +100, Runner-Up +50 per player
+    (spec: Team Achievements). Idempotent — a completed league can't award twice."""
+    league = await _league_or_404(db, league_id)
+    if league.owner_id != user.id:
+        raise forbidden("NOT_LEAGUE_OWNER", "Only the league owner can complete the tournament.")
+    if league.status == "completed":
+        raise conflict("ALREADY_COMPLETED", "This tournament was already completed.")
+    if body.runner_up_team_id is not None and body.runner_up_team_id == body.winner_team_id:
+        raise bad_request("VALIDATION_ERROR", "Winner and runner-up must be different teams.",
+                          field="runner_up_team_id")
+
+    async def _team_or_400(team_id: uuid.UUID) -> Team:
+        team = (
+            await db.execute(select(Team).where(Team.id == team_id, Team.league_id == league.id))
+        ).scalar_one_or_none()
+        if team is None:
+            raise bad_request("VALIDATION_ERROR", "That team doesn't belong to this league.",
+                              field="winner_team_id")
+        return team
+
+    winner = await _team_or_400(body.winner_team_id)
+    runner_up = await _team_or_400(body.runner_up_team_id) if body.runner_up_team_id else None
+
+    notif_ids: list[uuid.UUID] = []
+    categories: set[str] = set()
+    awarded: dict[str, int] = {}
+
+    async def _award_team(team: Team, points: int, label: str, key: str) -> None:
+        member_ids = (
+            await db.execute(select(LeagueMember.user_id)
+                             .where(LeagueMember.league_id == league.id,
+                                    LeagueMember.team_id == team.id,
+                                    LeagueMember.status == "active"))
+        ).scalars().all()
+        for uid in member_ids:
+            event = await scoring.award_points(
+                db, uid, source="milestone", source_id=league.id, points=points,
+                reason=f"{label} — {team.name} • {league.name}",
+                idempotency_key=f"tournament:{league.id}:{uid}:{key}",
+            )
+            if event is not None:
+                awarded[str(uid)] = points
+                if key == "champion":
+                    await scoring.grant_milestone(db, uid, "first_tournament",
+                                                  subtitle=f"Won {league.name}")
+                n = await create_notification(
+                    db, uid, "points_added",
+                    f"+{points} Qo points — {label} with {team.name}!")
+                notif_ids.append(n.id)
+                profile = (
+                    await db.execute(select(UserProfile).where(UserProfile.user_id == uid))
+                ).scalar_one_or_none()
+                category = scoring.ranking_category(profile)
+                if category:
+                    categories.add(category)
+
+    await _award_team(winner, settings.points_tournament_champion,
+                      "Championship Winner", "champion")
+    if runner_up is not None:
+        await _award_team(runner_up, settings.points_tournament_runner_up,
+                          "Championship Runner-Up", "runner_up")
+
+    league.status = "completed"
+    for category in categories:
+        await scoring.recompute_rankings(db, category)
+
+    # announce to every league member
+    all_members = (
+        await db.execute(select(LeagueMember.user_id)
+                         .where(LeagueMember.league_id == league.id,
+                                LeagueMember.status == "active"))
+    ).scalars().all()
+    text = f"{winner.name} won {league.name}! 🏆"
+    for uid in all_members:
+        n = await create_notification(db, uid, "match_result", text)
+        notif_ids.append(n.id)
+
+    await db.commit()
+    for nid in notif_ids:
+        background.add_task(deliver_notification, nid)
+
+    return {"league_id": str(league.id), "status": "completed",
+            "winner_team": winner.name,
+            "runner_up_team": runner_up.name if runner_up else None,
+            "qo_points_awarded": awarded}
+
+
 @router.get("/leagues/{league_id}/players")
 async def league_players(league_id: uuid.UUID, team_id: uuid.UUID | None = Query(default=None),
                          db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
