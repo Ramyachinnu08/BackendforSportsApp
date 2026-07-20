@@ -21,6 +21,7 @@ from app.db.models import (
     User,
     UserProfile,
 )
+from app.core.config import settings
 from app.services import scoring
 from app.services.notify import create_notification, deliver_notification
 
@@ -101,6 +102,11 @@ async def submit_points(
 
     winning_team = {"team_a_won": match.team_a_id, "team_b_won": match.team_b_id}.get(body.result)
 
+    # teams up-front so every ledger reason can carry real names
+    team_a = await db.get(Team, match.team_a_id)
+    team_b = await db.get(Team, match.team_b_id)
+    team_name = {match.team_a_id: team_a.name, match.team_b_id: team_b.name}
+
     awarded: dict[str, int] = {}
     notif_ids: list[uuid.UUID] = []
     categories: set[str] = set()
@@ -120,9 +126,16 @@ async def submit_points(
         ).scalar_one_or_none()
         old_ranks[stat.user_id] = qs_before.rank if qs_before else None
 
+        opponent_name = team_name[match.team_b_id if player_team == match.team_a_id else match.team_a_id]
+        parts = [f"vs {opponent_name}",
+                 f"{stat.runs} runs, {stat.wickets} wkts, {stat.catches} catches"]
+        if stat.is_mom:
+            parts.append(f"MoM bonus +{settings.points_mom_bonus}")
+        if won:
+            parts.append(f"{team_name[player_team]} win bonus +{settings.points_win_bonus}")
         event = await scoring.award_points(
             db, stat.user_id, source="match", source_id=match.id, points=points,
-            reason=f"Match performance • {stat.runs} runs, {stat.wickets} wkts, {stat.catches} catches",
+            reason="Match " + " • ".join(parts),
             idempotency_key=f"match:{match.id}:{stat.user_id}:{idempotency_key}",
         )
         awarded[str(stat.user_id)] = points if event is not None else 0
@@ -187,8 +200,6 @@ async def submit_points(
             notif_ids.append(n.id)
 
     # match result to all league members
-    team_a = await db.get(Team, match.team_a_id)
-    team_b = await db.get(Team, match.team_b_id)
     result_text = {
         "team_a_won": f"{team_a.name} beat {team_b.name}",
         "team_b_won": f"{team_b.name} beat {team_a.name}",
