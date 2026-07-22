@@ -411,15 +411,21 @@ async def playbook(tab: str | None = Query(default=None),
     for key in wanted:
         media_rows = (
             await db.execute(
-                select(Media, PostMedia.post_id)
+                select(Media, PostMedia.post_id, Post.content, Post.hashtags)
                 .join(PostMedia, PostMedia.media_id == Media.id)
                 .join(Post, Post.id == PostMedia.post_id)
                 .where(Post.author_id == user.id, Post.category == key, Post.deleted_at.is_(None))
                 .order_by(Media.created_at.desc()).limit(24)
             )
         ).all()
-        tabs[key] = [serialize_media_item(m) | {"date": m.created_at.date().isoformat(),
-                                                "post_id": str(pid)} for m, pid in media_rows]
+        tabs[key] = [serialize_media_item(m) | {
+            "date": m.created_at.date().isoformat(),
+            "post_id": str(pid),
+            # The post's caption is the story of this image — surface it so
+            # the playbook viewer can show the same text under the photo.
+            "caption": (content or "").strip(),
+            "hashtags": list(hashtags or []),
+        } for m, pid, content, hashtags in media_rows]
 
     return {
         "profile": {
