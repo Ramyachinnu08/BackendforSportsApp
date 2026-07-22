@@ -3,9 +3,9 @@ profiles and follow/track (spec §3.5–3.6, §4.9, §6.4, §8.4)."""
 import uuid
 from datetime import date, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Response, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -72,6 +72,39 @@ def _me_payload(user: User, profile: UserProfile | None) -> dict:
         } if user.role == "player" else None,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
+
+
+@router.get("/users/search")
+async def search_users(q: str = Query(..., min_length=1, max_length=80),
+                       limit: int = Query(20, ge=1, le=50),
+                       db: AsyncSession = Depends(get_db),
+                       viewer: User = Depends(get_current_user)):
+    """Instagram-style user lookup: type 's' → get every user whose name
+    or player_id starts with 's'. Case-insensitive; returns the newest
+    matches first."""
+    pattern = f"{q.strip()}%"
+    rows = (
+        await db.execute(
+            select(User, UserProfile, QoScore)
+            .outerjoin(UserProfile, UserProfile.user_id == User.id)
+            .outerjoin(QoScore, QoScore.user_id == User.id)
+            .where(User.id != viewer.id)
+            .where(or_(User.full_name.ilike(pattern),
+                       User.player_id.ilike(pattern)))
+            .order_by(User.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return {"items": [{
+        "id": str(u.id),
+        "name": u.full_name,
+        "player_id": u.player_id,
+        "avatar_url": avatar_url(u),
+        "sub_role": (p.sub_role if p else None),
+        "sport": (p.sport if p else None),
+        "qo_score": (qs.score if qs else 0),
+        "verified": u.verified,
+    } for u, p, qs in rows]}
 
 
 @router.get("/users/me")
