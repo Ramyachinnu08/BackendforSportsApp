@@ -371,13 +371,17 @@ async def playbook(tab: str | None = Query(default=None),
     ).scalar_one()
     teams_count = (
         await db.execute(select(func.count()).select_from(LeagueMember)
-                         .where(LeagueMember.user_id == user.id))
+                         .where(LeagueMember.user_id == user.id,
+                                LeagueMember.status == "active"))
     ).scalar_one()
+    # Tournaments = distinct leagues the player has actually joined.
+    # (The old count used MatchParticipant which double-counted leagues
+    # with multiple matches, showing e.g. "8 tournaments" for 6 real ones.)
     tournaments = (
-        await db.execute(select(func.count(func.distinct(Match.league_id)))
-                         .select_from(MatchParticipant)
-                         .join(Match, Match.id == MatchParticipant.match_id)
-                         .where(MatchParticipant.user_id == user.id))
+        await db.execute(select(func.count(func.distinct(LeagueMember.league_id)))
+                         .select_from(LeagueMember)
+                         .where(LeagueMember.user_id == user.id,
+                                LeagueMember.status == "active"))
     ).scalar_one()
 
     recos = (
