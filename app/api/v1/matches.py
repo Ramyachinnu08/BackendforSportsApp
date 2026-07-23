@@ -28,6 +28,46 @@ from app.services.notify import create_notification, deliver_notification
 router = APIRouter(prefix="/matches", tags=["matches"])
 
 
+@router.get("/{match_id}/participants")
+async def list_participants(
+    match_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_coach),
+):
+    """Returns any previously-saved participant stats for this match so the
+    coach's scoring screen can pre-fill the values instead of resetting
+    them to 0 (which was making saved scores appear to vanish)."""
+    match = (await db.execute(select(Match).where(Match.id == match_id))).scalar_one_or_none()
+    if not match:
+        not_found("Match not found")
+    rows = (
+        await db.execute(
+            select(MatchParticipant).where(MatchParticipant.match_id == match_id)
+        )
+    ).scalars().all()
+    return {
+        "match_id": str(match_id),
+        "result": match.result,
+        "submitted": bool(rows),
+        "items": [
+            {
+                "user_id": str(p.user_id),
+                "runs": p.runs or 0,
+                "balls": p.balls or 0,
+                "wickets": p.wickets or 0,
+                "catches": p.catches or 0,
+                "is_mom": bool(p.is_mom),
+                "is_player_of_match": bool(p.is_player_of_match),
+                "is_best_bowler": bool(p.is_best_bowler),
+                "is_best_batsman": bool(p.is_best_batsman),
+                "is_mvp": bool(p.is_mvp),
+                "qo_points_awarded": p.qo_points_awarded or 0,
+            }
+            for p in rows
+        ],
+    }
+
+
 class PlayerStat(BaseModel):
     user_id: uuid.UUID
     runs: int = Field(0, ge=0, le=1000)
