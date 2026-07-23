@@ -88,6 +88,63 @@ class PointsIn(BaseModel):
     score_b: dict | None = None
 
 
+class DraftIn(BaseModel):
+    player_stats: list[PlayerStat] = Field(min_length=1, max_length=60)
+
+
+@router.post("/{match_id}/draft")
+async def draft_points(
+    match_id: uuid.UUID,
+    body: DraftIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_coach),
+):
+    """Persist match stats as a draft — without awarding Qo points or
+    changing rankings — so the coach can come back later and see what
+    they entered. Called on every Save from the Edit Player screen so
+    scores never vanish.
+
+    Fully replaces the stats for the given players; leaves any players
+    not in the payload untouched (so team A and team B can be edited
+    independently)."""
+    match = await db.get(Match, match_id)
+    if match is None:
+        raise not_found("LEAGUE_NOT_FOUND", "This match doesn't exist.")
+    league = await db.get(League, match.league_id)
+    if league.owner_id != user.id:
+        raise forbidden("NOT_LEAGUE_OWNER", "Only the league owner can save points.")
+    if match.status == "completed":
+        # Already finalized — draft edits are a no-op so the client can
+        # still call save without erroring out.
+        return {"match_id": str(match_id), "saved": 0, "status": "completed"}
+
+    # Upsert each provided player's stats (delete existing, insert new).
+    from sqlalchemy import delete as sql_delete
+    for stat in body.player_stats:
+        await db.execute(
+            sql_delete(MatchParticipant).where(
+                MatchParticipant.match_id == match_id,
+                MatchParticipant.user_id == stat.user_id,
+            )
+        )
+        db.add(MatchParticipant(
+            match_id=match_id,
+            user_id=stat.user_id,
+            runs=stat.runs,
+            balls=stat.balls,
+            wickets=stat.wickets,
+            catches=stat.catches,
+            is_mom=stat.is_mom,
+            is_player_of_match=stat.is_player_of_match,
+            is_best_bowler=stat.is_best_bowler,
+            is_best_batsman=stat.is_best_batsman,
+            is_mvp=stat.is_mvp,
+            qo_points_awarded=0,  # award only happens on final submit
+        ))
+    await db.commit()
+    return {"match_id": str(match_id), "saved": len(body.player_stats), "status": match.status}
+
+
 @router.post("/{match_id}/points")
 async def submit_points(
     match_id: uuid.UUID,
