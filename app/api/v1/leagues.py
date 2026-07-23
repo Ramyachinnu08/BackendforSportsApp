@@ -26,6 +26,7 @@ from app.db.models import (
     League,
     LeagueMember,
     Match,
+    MatchParticipant,
     QoScore,
     Standing,
     Team,
@@ -534,21 +535,53 @@ async def league_players(league_id: uuid.UUID, team_id: uuid.UUID | None = Query
     if team_id:
         q = q.where(LeagueMember.team_id == team_id)
     rows = (await db.execute(q)).all()
-    return {
-        "items": [
-            {
-                "id": str(u.id),
-                "player_id": u.player_id,
-                "name": u.full_name,
-                "sub_role": p.sub_role if p else None,
-                "team_id": str(m.team_id),
-                "qo_score": qs.score if qs else 0,
-                "avatar_url": avatar_url(u),
-                "selected": False,
-            }
-            for m, u, p, qs in rows
-        ]
-    }
+
+    # Aggregate stats across every match in this league — like an IPL
+    # leaderboard: total runs, wickets, catches, points, matches played.
+    stats_rows = (
+        await db.execute(
+            select(
+                MatchParticipant.user_id,
+                func.count(MatchParticipant.id).label("matches"),
+                func.coalesce(func.sum(MatchParticipant.runs), 0).label("runs"),
+                func.coalesce(func.sum(MatchParticipant.wickets), 0).label("wickets"),
+                func.coalesce(func.sum(MatchParticipant.catches), 0).label("catches"),
+                func.coalesce(func.sum(MatchParticipant.qo_points_awarded), 0).label("points"),
+            )
+            .join(Match, Match.id == MatchParticipant.match_id)
+            .where(Match.league_id == league_id)
+            .group_by(MatchParticipant.user_id)
+        )
+    ).all()
+    stats_by_user = {str(row.user_id): row for row in stats_rows}
+
+    # Also fetch each team's name so the UI can show "RCB, MI…" beside the player.
+    teams = {t.id: t for t in (await db.execute(
+        select(Team).where(Team.league_id == league_id))).scalars().all()}
+
+    items = []
+    for m, u, p, qs in rows:
+        s = stats_by_user.get(str(u.id))
+        team = teams.get(m.team_id)
+        items.append({
+            "id": str(u.id),
+            "player_id": u.player_id,
+            "name": u.full_name,
+            "sub_role": p.sub_role if p else None,
+            "team_id": str(m.team_id),
+            "team_name": team.name if team else None,
+            "qo_score": qs.score if qs else 0,
+            "avatar_url": avatar_url(u),
+            "matches": int(s.matches) if s else 0,
+            "runs": int(s.runs) if s else 0,
+            "wickets": int(s.wickets) if s else 0,
+            "catches": int(s.catches) if s else 0,
+            "points_this_league": int(s.points) if s else 0,
+            "selected": False,
+        })
+    # Sort by points earned in the league (descending) — IPL leaderboard style.
+    items.sort(key=lambda x: x["points_this_league"], reverse=True)
+    return {"items": items}
 
 
 # --------------------------------------------------------------------------- matches
