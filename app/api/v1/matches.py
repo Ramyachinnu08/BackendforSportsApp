@@ -120,7 +120,23 @@ async def draft_points(
 
     # Upsert each provided player's stats (delete existing, insert new).
     from sqlalchemy import delete as sql_delete
+    # Map user → team for this league so we can fill team_id on the row
+    # (it's required in the model).
+    team_of = {
+        uid: tid
+        for uid, tid in (
+            await db.execute(
+                select(LeagueMember.user_id, LeagueMember.team_id)
+                .where(LeagueMember.league_id == match.league_id,
+                       LeagueMember.status == "active")
+            )
+        ).all()
+    }
     for stat in body.player_stats:
+        team_id = team_of.get(stat.user_id)
+        if team_id is None:
+            # Player isn't an active league member — skip silently.
+            continue
         await db.execute(
             sql_delete(MatchParticipant).where(
                 MatchParticipant.match_id == match_id,
@@ -130,6 +146,7 @@ async def draft_points(
         db.add(MatchParticipant(
             match_id=match_id,
             user_id=stat.user_id,
+            team_id=team_id,
             runs=stat.runs,
             balls=stat.balls,
             wickets=stat.wickets,
@@ -202,6 +219,14 @@ async def submit_points(
                               field="player_stats")
 
     winning_team = {"team_a_won": match.team_a_id, "team_b_won": match.team_b_id}.get(body.result)
+
+    # Clear any previously-saved draft participants so the final Submit
+    # can insert fresh rows without violating the unique constraint on
+    # (match_id, user_id). Fixes "scores vanish after Submit".
+    from sqlalchemy import delete as sql_delete
+    await db.execute(
+        sql_delete(MatchParticipant).where(MatchParticipant.match_id == match.id)
+    )
 
     # teams up-front so every ledger reason can carry real names
     team_a = await db.get(Team, match.team_a_id)
