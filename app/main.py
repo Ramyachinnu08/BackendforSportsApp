@@ -26,6 +26,21 @@ async def lifespan(app: FastAPI):
     Path(settings.storage_dir, "public").mkdir(parents=True, exist_ok=True)
     Path(settings.storage_dir, "private").mkdir(parents=True, exist_ok=True)
     async with SessionLocal() as db:
+        # Lightweight one-shot migration: add columns that were introduced
+        # after the initial schema. Postgres supports IF NOT EXISTS so
+        # this is safe to run on every boot without a real migration tool.
+        from sqlalchemy import text
+        alter_statements = [
+            "ALTER TABLE match_participants ADD COLUMN IF NOT EXISTS is_player_of_match BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE match_participants ADD COLUMN IF NOT EXISTS is_best_bowler BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE match_participants ADD COLUMN IF NOT EXISTS is_best_batsman BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE match_participants ADD COLUMN IF NOT EXISTS is_mvp BOOLEAN NOT NULL DEFAULT FALSE",
+        ]
+        for stmt in alter_statements:
+            try:
+                await db.execute(text(stmt))
+            except Exception as e:
+                logging.warning("Migration statement failed (may be OK): %s — %s", stmt, e)
         await seed_tiers(db)
         await db.commit()
     yield
