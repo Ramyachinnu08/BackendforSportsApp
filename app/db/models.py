@@ -261,6 +261,10 @@ class MatchParticipant(UUIDPkMixin, TimestampMixin, Base):
     wickets: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     catches: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_mom: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_player_of_match: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_best_bowler: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_best_batsman: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_mvp: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     qo_points_awarded: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (UniqueConstraint("match_id", "user_id", name="uq_match_participant"),)
