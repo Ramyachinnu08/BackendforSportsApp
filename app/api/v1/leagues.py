@@ -518,6 +518,60 @@ async def complete_tournament(league_id: uuid.UUID, body: CompleteTournamentIn,
             "qo_points_awarded": awarded}
 
 
+@router.get("/leagues/{league_id}/players/{user_id}/matches")
+async def player_match_history(
+    league_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Per-match breakdown for one player inside one league — used by
+    the tap-on-a-leaderboard-row detail screen so the coach can see how
+    each match went, not just the aggregate."""
+    await _league_or_404(db, league_id)
+
+    # Pull team names once so every row can label the fixture nicely.
+    teams = {t.id: t for t in (await db.execute(
+        select(Team).where(Team.league_id == league_id))).scalars().all()}
+
+    rows = (
+        await db.execute(
+            select(MatchParticipant, Match)
+            .join(Match, Match.id == MatchParticipant.match_id)
+            .where(
+                Match.league_id == league_id,
+                MatchParticipant.user_id == user_id,
+            )
+            .order_by(Match.scheduled_at.desc().nullslast(),
+                      Match.created_at.desc())
+        )
+    ).all()
+
+    items = []
+    for p, m in rows:
+        team_a = teams.get(m.team_a_id)
+        team_b = teams.get(m.team_b_id)
+        items.append({
+            "match_id": str(m.id),
+            "team_a": team_a.name if team_a else None,
+            "team_b": team_b.name if team_b else None,
+            "played_at": (m.scheduled_at or m.created_at).isoformat()
+                          if (m.scheduled_at or m.created_at) else None,
+            "result": m.result,
+            "status": m.status,
+            "runs": p.runs or 0,
+            "wickets": p.wickets or 0,
+            "catches": p.catches or 0,
+            "is_mom": bool(p.is_mom),
+            "is_mvp": bool(p.is_mvp),
+            "is_best_bowler": bool(p.is_best_bowler),
+            "is_best_batsman": bool(p.is_best_batsman),
+            "is_player_of_match": bool(p.is_player_of_match),
+            "qo_points_awarded": p.qo_points_awarded or 0,
+        })
+    return {"items": items}
+
+
 @router.get("/leagues/{league_id}/players")
 async def league_players(league_id: uuid.UUID, team_id: uuid.UUID | None = Query(default=None),
                          db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
