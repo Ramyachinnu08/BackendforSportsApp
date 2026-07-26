@@ -96,9 +96,28 @@ async def register(body: RegisterIn, background: BackgroundTasks, db: AsyncSessi
         raise unprocessable("WEAK_PASSWORD",
                             f"Password must be at least {settings.password_min_length} characters and include a letter and a number.",
                             field="password")
-    existing = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+    # Only reject if a NON-deleted user has this email. Soft-deleted
+    # accounts free up their email + name so the person (or someone new)
+    # can create a fresh account. Two different real users with the
+    # same name (e.g. "Rahul") is fine — we don't check names.
+    existing = (await db.execute(
+        select(User).where(User.email == body.email, User.deleted_at.is_(None))
+    )).scalar_one_or_none()
     if existing:
         raise conflict("EMAIL_TAKEN", "An account with this email already exists.", field="email")
+
+    # If a soft-deleted account with this email still exists, rename its
+    # email (email column has a UNIQUE constraint at the DB level, so
+    # without this rewrite the fresh insert would still fail).
+    deleted_hits = (await db.execute(
+        select(User).where(User.email == body.email, User.deleted_at.is_not(None))
+    )).scalars().all()
+    for old in deleted_hits:
+        # Simple, deterministic suffix so we don't collide with itself
+        # again if the same person deletes+signs-up multiple times.
+        old.email = f"deleted+{old.id}@sportyqo.local"
+    if deleted_hits:
+        await db.flush()
 
     user = User(
         email=body.email,
@@ -280,11 +299,31 @@ async def otp_verify(body: OtpVerifyIn, db: AsyncSession = Depends(get_db),
     otp.verified_at = utcnow()
     target = user or (await db.get(User, otp.user_id) if otp.user_id else None)
     if target is not None:
+        # Only consider ACTIVE users when checking if the phone is taken.
         taken = (
-            await db.execute(select(User.id).where(User.phone == otp.phone, User.id != target.id))
+            await db.execute(
+                select(User.id).where(
+                    User.phone == otp.phone,
+                    User.id != target.id,
+                    User.deleted_at.is_(None),
+                )
+            )
         ).first()
         if taken:
             raise conflict("PHONE_TAKEN", "This phone number is already linked to another account.", field="phone")
+        # If soft-deleted users still hold this phone number, free it up
+        # so the unique constraint doesn't block the target user.
+        deleted_holders = (
+            await db.execute(
+                select(User).where(
+                    User.phone == otp.phone,
+                    User.id != target.id,
+                    User.deleted_at.is_not(None),
+                )
+            )
+        ).scalars().all()
+        for old in deleted_holders:
+            old.phone = None
         target.phone = otp.phone
         target.phone_verified_at = otp.verified_at
     await db.commit()
