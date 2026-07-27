@@ -359,8 +359,19 @@ async def password_forgot(body: ForgotIn, background: BackgroundTasks, db: Async
             f"If you didn't request this, you can ignore this email — your password won't change.\n\n"
             f"— The SportyQo team"
         )
-        background.add_task(get_email_provider().send, user.email,
-                            "Reset your SportyQo password", email_body)
+        # Send synchronously so SMTP errors surface in logs immediately
+        # (background tasks swallow exceptions silently). Once confirmed
+        # working, this can move back to background.add_task.
+        import logging
+        _log = logging.getLogger("sportyqo.auth")
+        try:
+            _log.info("Sending password reset email to %s", user.email)
+            await get_email_provider().send(user.email,
+                "Reset your SportyQo password", email_body)
+            _log.info("Password reset email sent successfully to %s", user.email)
+        except Exception as e:
+            _log.error("Failed to send password reset email to %s: %s",
+                       user.email, e, exc_info=True)
     # Same response whether or not the account exists — no enumeration.
     return {"sent": True}
 
