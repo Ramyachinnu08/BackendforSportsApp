@@ -82,50 +82,59 @@ def next_tier_of(tier: CardTier, tiers: list[CardTier]) -> CardTier | None:
 
 def match_points(runs: int, wickets: int, catches: int, is_mom: bool, won: bool,
                  is_player_of_match: bool = False, is_best_bowler: bool = False,
-                 is_best_batsman: bool = False, is_mvp: bool = False) -> int:
-    """Official SportyQo cricket slabs (server-owned — never trust client math).
+                 is_best_batsman: bool = False, is_mvp: bool = False,
+                 balls: int = 0, fours: int = 0, sixes: int = 0) -> int:
+    """Official Qo Points formula — matches the published Qo scoring chart.
 
-    Batting:   0-10→5 | 11-25→8 | 26-45→12 | 46-99→20 | 100+→50
-    Bowling:   1-2 wkts→5 | 3+→20
-    Fielding:  2 catches→2 | 3+→5
-    Bonus:     MoM +20, Player of the Match +20, Best Bowler +20,
-               Best Batsman +20, MVP +25, team win +20 (all config)."""
-    if runs >= 100:
-        batting = 50
-    elif runs >= 46:
-        batting = 20
-    elif runs >= 26:
-        batting = 12
-    elif runs >= 11:
-        batting = 8
-    else:
-        batting = 5
+    Batting:  +20 participation | +0.5 per run | 30-49 bonus +10 | 50+ bonus +15
+              (not cumulative) | +2 per four | +4 per six | Strike Rate
+              100-120 +5 / 121-150 +10 / 151+ +15
+    Bowling:  +15 per wicket | 2 wkts +5 | 3 wkts +10 | 5 wkts +20
+              (highest tier only)
+    Fielding: +5 per assist (catch, run-out, stumping)
+    Bonuses:  Match Win +20, MoM +20, Best Bowler +20, Best Batsman +20,
+              Runner-Up (PoM) +50, League Champion (MVP) +100"""
+    pts = 20.0
+    pts += runs * 0.5
+    if runs >= 50:
+        pts += 15
+    elif runs >= 30:
+        pts += 10
+    pts += fours * 2
+    pts += sixes * 4
+    if balls > 0:
+        sr = (runs / balls) * 100
+        if sr >= 151:
+            pts += 15
+        elif sr >= 121:
+            pts += 10
+        elif sr >= 100:
+            pts += 5
 
-    if wickets >= 3:
-        bowling = 20
-    elif wickets >= 1:
-        bowling = 5
-    else:
-        bowling = 0
+    pts += wickets * 15
+    if wickets >= 5:
+        pts += 20
+    elif wickets >= 3:
+        pts += 10
+    elif wickets >= 2:
+        pts += 5
 
-    if catches >= 3:
-        fielding = 5
-    elif catches == 2:
-        fielding = 2
-    else:
-        fielding = 0
+    pts += catches * 5
 
-    bonus = (settings.points_mom_bonus if is_mom else 0) + (
-        settings.points_win_bonus if won else 0)
-    if is_player_of_match:
-        bonus += settings.points_award_bonus
-    if is_best_bowler:
-        bonus += settings.points_award_bonus
+    if won:
+        pts += 20
+    if is_mom:
+        pts += 20
     if is_best_batsman:
-        bonus += settings.points_award_bonus
+        pts += 20
+    if is_best_bowler:
+        pts += 20
+    if is_player_of_match:
+        pts += 50
     if is_mvp:
-        bonus += settings.points_mvp_bonus
-    return batting + bowling + fielding + bonus
+        pts += 100
+
+    return int(round(pts))
 
 
 async def award_points(
