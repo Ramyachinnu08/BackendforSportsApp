@@ -42,15 +42,26 @@ class ConsoleEmail(EmailProvider):
 class SmtpEmail(EmailProvider):
     async def send(self, to: str, subject: str, body: str) -> None:
         import smtplib
+        import ssl
         from email.message import EmailMessage
         msg = EmailMessage()
         msg["From"], msg["To"], msg["Subject"] = settings.email_from, to, subject
         msg.set_content(body)
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
-            server.starttls()
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
-            server.send_message(msg)
+        # Port 465 = SSL, 587 = STARTTLS. Gmail uses 587 with app password.
+        if settings.smtp_port == 465:
+            with smtplib.SMTP_SSL(settings.smtp_host, 465,
+                                  context=ssl.create_default_context()) as server:
+                if settings.smtp_user:
+                    server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                if settings.smtp_user:
+                    server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
 def get_email_provider() -> EmailProvider:
     if settings.email_provider == "smtp" and settings.smtp_host:
         return SmtpEmail()
