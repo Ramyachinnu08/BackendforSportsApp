@@ -94,22 +94,13 @@ def match_points(runs: int, wickets: int, catches: int, is_mom: bool, won: bool,
     Fielding: +5 per assist (catch, run-out, stumping)
     Bonuses:  Match Win +20, MoM +20, Best Bowler +20, Best Batsman +20,
               Runner-Up (PoM) +50, League Champion (MVP) +100"""
-    pts = 20.0
-    pts += runs * 0.5
+    pts = runs * 0.5
     if runs >= 50:
         pts += 15
     elif runs >= 30:
         pts += 10
     pts += fours * 2
     pts += sixes * 4
-    if balls > 0:
-        sr = (runs / balls) * 100
-        if sr >= 151:
-            pts += 15
-        elif sr >= 121:
-            pts += 10
-        elif sr >= 100:
-            pts += 5
 
     pts += wickets * 15
     if wickets >= 5:
