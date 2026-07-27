@@ -347,8 +347,20 @@ async def password_forgot(body: ForgotIn, background: BackgroundTasks, db: Async
         db.add(PasswordReset(user_id=user.id, token_hash=hash_opaque_token(token),
                              expires_at=utcnow() + timedelta(hours=1)))
         await db.commit()
-        background.add_task(get_email_provider().send, user.email, "Reset your SportyQo password",
-                            f"Use this token to reset your password (valid 1 hour): {token}")
+        # Friendly, formatted email so the user knows what to do.
+        email_body = (
+            f"Hi {user.full_name or 'there'},\n\n"
+            f"We received a request to reset your SportyQo password.\n\n"
+            f"Your reset code is:\n\n"
+            f"    {token}\n\n"
+            f"Open the SportyQo app → Login → Forgot Password → Reset Password screen,\n"
+            f"paste this code and set your new password.\n\n"
+            f"This code will expire in 1 hour.\n\n"
+            f"If you didn't request this, you can ignore this email — your password won't change.\n\n"
+            f"— The SportyQo team"
+        )
+        background.add_task(get_email_provider().send, user.email,
+                            "Reset your SportyQo password", email_body)
     # Same response whether or not the account exists — no enumeration.
     return {"sent": True}
 
