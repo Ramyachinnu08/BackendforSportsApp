@@ -343,7 +343,12 @@ class ForgotIn(BaseModel):
 async def password_forgot(body: ForgotIn, background: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     user = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
     if user and user.deleted_at is None:
-        token = new_opaque_token()
+        # Short 4-digit code — much easier for the user to type than a
+        # long token. Still hashed on the way in so it's not stored in
+        # plaintext. Rate-limiting on the endpoint plus a 1-hour expiry
+        # keeps brute-force impractical.
+        import secrets
+        token = f"{secrets.randbelow(10000):04d}"  # e.g. "0432", "8791"
         db.add(PasswordReset(user_id=user.id, token_hash=hash_opaque_token(token),
                              expires_at=utcnow() + timedelta(hours=1)))
         await db.commit()
@@ -351,10 +356,10 @@ async def password_forgot(body: ForgotIn, background: BackgroundTasks, db: Async
         email_body = (
             f"Hi {user.full_name or 'there'},\n\n"
             f"We received a request to reset your SportyQo password.\n\n"
-            f"Your reset code is:\n\n"
+            f"Your 4-digit reset code is:\n\n"
             f"    {token}\n\n"
             f"Open the SportyQo app → Login → Forgot Password → Reset Password screen,\n"
-            f"paste this code and set your new password.\n\n"
+            f"enter this code and set your new password.\n\n"
             f"This code will expire in 1 hour.\n\n"
             f"If you didn't request this, you can ignore this email — your password won't change.\n\n"
             f"— The SportyQo team"
