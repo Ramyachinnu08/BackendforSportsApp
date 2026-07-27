@@ -72,6 +72,8 @@ class PlayerStat(BaseModel):
     user_id: uuid.UUID
     runs: int = Field(0, ge=0, le=1000)
     balls: int = Field(0, ge=0, le=1000)
+    fours: int = Field(0, ge=0, le=100)
+    sixes: int = Field(0, ge=0, le=100)
     wickets: int = Field(0, ge=0, le=10)
     catches: int = Field(0, ge=0, le=20)
     is_mom: bool = False
@@ -246,7 +248,10 @@ async def submit_points(
             is_player_of_match=stat.is_player_of_match,
             is_best_bowler=stat.is_best_bowler,
             is_best_batsman=stat.is_best_batsman,
-            is_mvp=stat.is_mvp)
+            is_mvp=stat.is_mvp,
+            balls=stat.balls,
+            fours=getattr(stat, 'fours', 0) or 0,
+            sixes=getattr(stat, 'sixes', 0) or 0)
 
         db.add(MatchParticipant(match_id=match.id, user_id=stat.user_id, team_id=player_team,
                                 runs=stat.runs, balls=stat.balls, wickets=stat.wickets,
