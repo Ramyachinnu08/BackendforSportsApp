@@ -41,6 +41,28 @@ from app.services.serializers import avatar_url, serialize_media_item
 router = APIRouter(tags=["coaches"])
 
 
+def _age_group(dob) -> str | None:
+    """Turn a date of birth into an age band like 'U16' for the Dugout."""
+    if not dob:
+        return None
+    try:
+        today = date.today()
+        age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    except Exception:
+        return None
+    if age <= 0:
+        return None
+    if age <= 12:
+        return "U12"
+    if age <= 14:
+        return "U14"
+    if age <= 16:
+        return "U16"
+    if age <= 19:
+        return "U19"
+    return "Open"
+
+
 async def _get_or_create_coach_profile(db: AsyncSession, user: User) -> CoachProfile:
     cp = (await db.execute(select(CoachProfile).where(CoachProfile.user_id == user.id))).scalar_one_or_none()
     if cp is None:
@@ -111,7 +133,6 @@ async def coach_dashboard(db: AsyncSession = Depends(get_db), user: User = Depen
         matches = (
             await db.execute(select(func.count()).select_from(Match).where(Match.league_id.in_(league_ids)))
         ).scalar_one()
-        # win rate: fraction of roster players' completed-match participations on the winning side
         roster_ids = (
             await db.execute(select(CoachPlayer.user_id).where(CoachPlayer.coach_id == user.id))
         ).scalars().all()
@@ -231,6 +252,11 @@ async def player_directory(q: str | None = Query(None, max_length=80),
         item = _roster_item(u, p, qs, tiers, "active")
         item["on_roster"] = u.id in on_roster
         item.pop("status", None)
+        # Extra fields for the Dugout community card (sport / age / academy).
+        # getattr keeps this safe even if a field is missing on the model.
+        item["sport"] = getattr(p, "sport", None) or getattr(u, "sport", None)
+        item["age_group"] = _age_group(getattr(p, "dob", None) or getattr(u, "dob", None))
+        item["academy"] = getattr(p, "school", None) or getattr(p, "team", None)
         items.append(item)
     return {"items": items, "total": len(items)}
 
