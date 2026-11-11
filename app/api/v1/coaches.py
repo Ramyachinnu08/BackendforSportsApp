@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.core.deps import require_coach
+from app.core.deps import get_current_user, require_coach
 from app.core.errors import bad_request, conflict, not_found, unprocessable
 from app.core.security import utcnow
 from app.db.base import get_db
@@ -167,6 +167,7 @@ def _roster_item(user_row: User, profile: UserProfile | None, qs: QoScore | None
         "qo_score": qs.score if qs else 0,
         "card_tier": scoring.tier_slug(tier.label),
         "avatar_url": avatar_url(user_row),
+        "verified": user_row.verified,
         "last_active_at": user_row.updated_at.isoformat() if user_row.updated_at else None,
         "status": status,
     }
@@ -198,7 +199,7 @@ class AddPlayerIn(BaseModel):
 @router.get("/players/directory")
 async def player_directory(q: str | None = Query(None, max_length=80),
                            db: AsyncSession = Depends(get_db),
-                           user: User = Depends(require_coach)):
+                           user: User = Depends(get_current_user)):
     """All registered (onboarded) students, so coaches can browse the
     full registry before typing a name — with roster membership flags."""
     query = (
