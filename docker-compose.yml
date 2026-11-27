@@ -8,8 +8,6 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./scripts/initdb.sql:/docker-entrypoint-initdb.d/initdb.sql:ro
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sportyqo"]
       interval: 5s
@@ -19,12 +17,25 @@ services:
   api:
     build: .
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
       DATABASE_URL: postgresql+asyncpg://sportyqo:sportyqo@db:5432/sportyqo
-      BASE_URL: http://localhost:8000
-      JWT_SECRET: change-me-in-production
-      ADMIN_API_KEY: change-me-admin-key
-    ports:
-      - "8000:8000"
+      BASE_URL: ${BASE_URL}
+      SHARE_BASE_URL: ${SHARE_BASE_URL:-https://sportyqo.app}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+      EMAIL_FROM: ${EMAIL_FROM}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+    expose:
+      - "8000"
     volumes:
       - storage:/srv/sportyqo/storage
     depends_on:
